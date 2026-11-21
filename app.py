@@ -421,104 +421,118 @@ def get_profile(name):
 # Wikipedia / Wikimedia thumbnail API
 # =========================================================
 
-@st.cache_data(ttl=86400, show_spinner=False)
+# =========================================================
+# ONLINE CHARACTER IMAGES — FIXED
+# Wikipedia API with multiple search fallbacks
+# =========================================================
 
+@st.cache_data(ttl=86400, show_spinner=False)
 def get_character_image(character):
 
     search_name = str(character)
 
-    # Remove dataset formatting where possible
     search_name = search_name.split("/")[0]
     search_name = search_name.replace("_", " ").strip()
 
-    search_query = f"{search_name} Marvel Comics character"
+    search_queries = [
+        f"{search_name} Marvel Comics",
+        f"{search_name} Marvel superhero",
+        f"{search_name} Marvel character",
+        search_name
+    ]
 
-    try:
-
-        response = requests.get(
-            "https://en.wikipedia.org/w/api.php",
-            params={
-                "action": "query",
-                "generator": "search",
-                "gsrsearch": search_query,
-                "gsrlimit": 1,
-                "prop": "pageimages|info",
-                "piprop": "thumbnail",
-                "pithumbsize": 600,
-                "inprop": "url",
-                "format": "json"
-            },
-            headers={
-                "User-Agent": "NEXUSMarvelIntelligence/1.1"
-            },
-            timeout=12
+    headers = {
+        "User-Agent": (
+            "NEXUSMarvelIntelligence/1.2 "
+            "(character image retrieval)"
         )
+    }
 
-        response.raise_for_status()
+    session = requests.Session()
+    session.headers.update(headers)
 
-        data = response.json()
+    for search_query in search_queries:
 
-        pages = data.get("query", {}).get("pages", {})
+        try:
 
-        if not pages:
-            return None, None
+            # STEP 1: Search multiple Wikipedia articles
 
-        page = next(iter(pages.values()))
-
-        image_url = page.get(
-            "thumbnail", {}
-        ).get("source")
-
-        page_url = page.get(
-            "fullurl"
-        )
-
-        if image_url:
-            return image_url, page_url
-
-    except Exception:
-        pass
-
-    return None, None
-
-
-def display_character_image(character, width=None):
-
-    image_url, source_url = get_character_image(character)
-
-    if image_url:
-
-        st.image(
-            image_url,
-            use_container_width=True
-        )
-
-        if source_url:
-            st.markdown(
-                f"[Image source: Wikipedia]({source_url})"
+            search_response = session.get(
+                "https://en.wikipedia.org/w/api.php",
+                params={
+                    "action": "query",
+                    "list": "search",
+                    "srsearch": search_query,
+                    "srnamespace": 0,
+                    "srlimit": 8,
+                    "format": "json"
+                },
+                timeout=15
             )
 
-    else:
+            search_response.raise_for_status()
 
-        st.markdown(
-            """
-            <div style="
-                background:linear-gradient(145deg,#251012,#100d0e);
-                border:1px solid #692027;
-                border-radius:10px;
-                padding:35px 10px;
-                text-align:center;
-                color:#ff4652;
-                font-size:30px;">
-                ✦
-                <div style="font-size:11px;color:#aaa;margin-top:8px;">
-                    IMAGE UNAVAILABLE
-                </div>
-            </div>
-            """,
-            unsafe_allow_html=True
-        )
+            search_results = (
+                search_response.json()
+                .get("query", {})
+                .get("search", [])
+            )
 
+            if not search_results:
+                continue
+
+            # STEP 2: Retrieve thumbnails for search results
+
+            page_ids = [
+                str(result["pageid"])
+                for result in search_results
+            ]
+
+            image_response = session.get(
+                "https://en.wikipedia.org/w/api.php",
+                params={
+                    "action": "query",
+                    "pageids": "|".join(page_ids),
+                    "prop": "pageimages|info",
+                    "piprop": "thumbnail",
+                    "pithumbsize": 800,
+                    "inprop": "url",
+                    "format": "json"
+                },
+                timeout=15
+            )
+
+            image_response.raise_for_status()
+
+            pages = (
+                image_response.json()
+                .get("query", {})
+                .get("pages", {})
+            )
+
+            # STEP 3: Find the first available image
+
+            for result in search_results:
+
+                page_id = str(result["pageid"])
+
+                page = pages.get(page_id, {})
+
+                image_url = (
+                    page.get("thumbnail", {})
+                    .get("source")
+                )
+
+                page_url = page.get("fullurl")
+
+                if image_url:
+
+                    return image_url, page_url
+
+        except Exception:
+            continue
+
+    return None, None
 
 # =========================================================
 # CHARACTER GALLERY
