@@ -1,8 +1,8 @@
-streamlit
+sstreamlit
 pandas
 numpy
 networkx
 plotly
-requests
 faiss-cpu
 sentence-transformers
+requests
