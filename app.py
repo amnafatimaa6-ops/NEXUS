@@ -416,123 +416,280 @@ def get_profile(name):
     return result.iloc[0]
 
 
-# =========================================================
-# ONLINE CHARACTER IMAGES
-# Wikipedia / Wikimedia thumbnail API
-# =========================================================
 
 # =========================================================
-# ONLINE CHARACTER IMAGES — FIXED
-# Wikipedia API with multiple search fallbacks
+# ONLINE CHARACTER IMAGES — NEXUS 1.2
+# Wikimedia Commons + Wikipedia fallback
+# No API keys required
 # =========================================================
+
+# Convert dataset names into recognisable search names.
+# The dataset contains some truncated character names.
+
+IMAGE_NAME_OVERRIDES = {
+
+    "CAPTAIN AMERICA": "Captain America Steve Rogers Marvel",
+    "SPIDER-MAN": "Spider-Man Peter Parker Marvel",
+    "IRON MAN": "Iron Man Tony Stark Marvel",
+    "MR. FANTASTIC": "Mister Fantastic Reed Richards Marvel",
+    "THING": "The Thing Ben Grimm Marvel",
+    "HUMAN TORCH": "Human Torch Johnny Storm Marvel",
+    "SCARLET WITCH": "Scarlet Witch Wanda Maximoff Marvel",
+    "WOLVERINE": "Wolverine Logan Marvel",
+    "THOR": "Thor Marvel Comics",
+    "HULK": "Hulk Bruce Banner Marvel",
+    "BLACK WIDOW": "Black Widow Natasha Romanoff Marvel",
+    "HAWKEYE": "Hawkeye Clint Barton Marvel",
+    "DOCTOR STRANGE": "Doctor Strange Marvel",
+    "DAREDEVIL": "Daredevil Matt Murdock Marvel",
+    "BLACK PANTHER": "Black Panther TChalla Marvel",
+    "DEADPOOL": "Deadpool Marvel",
+    "LOKI": "Loki Marvel Comics",
+    "VISION": "Vision Marvel Comics",
+    "ANT-MAN": "Ant-Man Scott Lang Marvel",
+    "WASP": "Wasp Janet van Dyne Marvel"
+}
+
+
+def get_image_search_name(character):
+
+    name = str(character).strip()
+
+    # Extract the primary character name.
+    primary_name = name.split("/")[0].strip()
+
+    primary_name = primary_name.replace("_", " ")
+
+    # Check known character mappings.
+    for key, value in IMAGE_NAME_OVERRIDES.items():
+
+        if primary_name.upper().startswith(key):
+            return value
+
+    # General fallback.
+    return f"{primary_name} Marvel Comics character"
+
+
+def search_wikimedia_image(search_query):
+
+    headers = {
+        "User-Agent": "NEXUSMarvelIntelligence/1.2"
+    }
+
+    try:
+
+        response = requests.get(
+            "https://commons.wikimedia.org/w/api.php",
+
+            params={
+
+                "action": "query",
+                "generator": "search",
+                "gsrsearch": search_query,
+                "gsrnamespace": 6,
+                "gsrlimit": 10,
+
+                "prop": "imageinfo",
+                "iiprop": "url",
+                "iiurlwidth": 800,
+
+                "format": "json"
+
+            },
+
+            headers=headers,
+            timeout=20
+        )
+
+        response.raise_for_status()
+
+        pages = (
+            response.json()
+            .get("query", {})
+            .get("pages", {})
+        )
+
+        # Prefer relevant image results.
+        for page in pages.values():
+
+            image_info = page.get(
+                "imageinfo", []
+            )
+
+            if not image_info:
+                continue
+
+            info = image_info[0]
+
+            image_url = (
+                info.get("thumburl")
+                or info.get("url")
+            )
+
+            source_url = info.get("descriptionurl")
+
+            if image_url and image_url.startswith("https://"):
+
+                return image_url, source_url
+
+    except Exception:
+        pass
+
+    return None, None
+
+
+def search_wikipedia_image(search_query):
+
+    headers = {
+        "User-Agent": "NEXUSMarvelIntelligence/1.2"
+    }
+
+    try:
+
+        response = requests.get(
+
+            "https://en.wikipedia.org/w/api.php",
+
+            params={
+
+                "action": "query",
+                "generator": "search",
+                "gsrsearch": search_query,
+                "gsrnamespace": 0,
+                "gsrlimit": 10,
+
+                "prop": "pageimages|info",
+                "piprop": "thumbnail",
+                "pithumbsize": 800,
+
+                "inprop": "url",
+                "format": "json"
+
+            },
+
+            headers=headers,
+            timeout=20
+        )
+
+        response.raise_for_status()
+
+        pages = (
+            response.json()
+            .get("query", {})
+            .get("pages", {})
+        )
+
+        for page in pages.values():
+
+            image_url = (
+                page.get("thumbnail", {})
+                .get("source")
+            )
+
+            source_url = page.get("fullurl")
+
+            if image_url and image_url.startswith("https://"):
+
+                return image_url, source_url
+
+    except Exception:
+        pass
+
+    return None, None
+
 
 @st.cache_data(ttl=86400, show_spinner=False)
 def get_character_image(character):
 
-    search_name = str(character)
-
-    search_name = search_name.split("/")[0]
-    search_name = search_name.replace("_", " ").strip()
+    search_name = get_image_search_name(character)
 
     search_queries = [
-        f"{search_name} Marvel Comics",
-        f"{search_name} Marvel superhero",
-        f"{search_name} Marvel character",
+
+        search_name + " comic book",
+
+        search_name + " character artwork",
+
+        search_name + " Marvel superhero",
+
         search_name
+
     ]
 
-    headers = {
-        "User-Agent": (
-            "NEXUSMarvelIntelligence/1.2 "
-            "(character image retrieval)"
+    # SOURCE 1: Wikimedia Commons
+
+    for query in search_queries:
+
+        image_url, source_url = search_wikimedia_image(
+            query
         )
-    }
 
-    session = requests.Session()
-    session.headers.update(headers)
+        if image_url:
 
-    for search_query in search_queries:
+            return image_url, source_url
+
+    # SOURCE 2: Wikipedia fallback
+
+    for query in search_queries:
+
+        image_url, source_url = search_wikipedia_image(
+            query
+        )
+
+        if image_url:
+
+            return image_url, source_url
+
+    return None, None
+
+
+# =========================================================
+# CHARACTER IMAGE DISPLAY
+# =========================================================
+
+def display_character_image(character, width=None):
+
+    image_url, source_url = get_character_image(character)
+
+    if image_url:
 
         try:
 
-            # STEP 1: Search multiple Wikipedia articles
-
-            search_response = session.get(
-                "https://en.wikipedia.org/w/api.php",
-                params={
-                    "action": "query",
-                    "list": "search",
-                    "srsearch": search_query,
-                    "srnamespace": 0,
-                    "srlimit": 8,
-                    "format": "json"
-                },
-                timeout=15
+            st.image(
+                image_url,
+                use_container_width=True
             )
 
-            search_response.raise_for_status()
+            if source_url:
 
-            search_results = (
-                search_response.json()
-                .get("query", {})
-                .get("search", [])
-            )
-
-            if not search_results:
-                continue
-
-            # STEP 2: Retrieve thumbnails for search results
-
-            page_ids = [
-                str(result["pageid"])
-                for result in search_results
-            ]
-
-            image_response = session.get(
-                "https://en.wikipedia.org/w/api.php",
-                params={
-                    "action": "query",
-                    "pageids": "|".join(page_ids),
-                    "prop": "pageimages|info",
-                    "piprop": "thumbnail",
-                    "pithumbsize": 800,
-                    "inprop": "url",
-                    "format": "json"
-                },
-                timeout=15
-            )
-
-            image_response.raise_for_status()
-
-            pages = (
-                image_response.json()
-                .get("query", {})
-                .get("pages", {})
-            )
-
-            # STEP 3: Find the first available image
-
-            for result in search_results:
-
-                page_id = str(result["pageid"])
-
-                page = pages.get(page_id, {})
-
-                image_url = (
-                    page.get("thumbnail", {})
-                    .get("source")
+                st.markdown(
+                    f"[Image source]({source_url})"
                 )
 
-                page_url = page.get("fullurl")
-
-                if image_url:
-
-                    return image_url, page_url
-
         except Exception:
-            continue
 
-    return None, None
+            st.warning("Character image could not be displayed.")
+
+    else:
+
+        st.markdown(
+            """
+            <div style="
+                background:linear-gradient(145deg,#251012,#100d0e);
+                border:1px solid #692027;
+                border-radius:10px;
+                padding:35px 10px;
+                text-align:center;
+                color:#ff4652;
+                font-size:30px;">
+                ✦
+                <div style="font-size:11px;color:#aaa;margin-top:8px;">
+                    IMAGE UNAVAILABLE
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+
 
 # =========================================================
 # CHARACTER GALLERY
