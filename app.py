@@ -3,9 +3,7 @@ import os
 import ast
 import zipfile
 import requests
-import re
 from pathlib import Path
-from urllib.parse import quote
 
 import streamlit as st
 import pandas as pd
@@ -18,7 +16,7 @@ from sentence_transformers import SentenceTransformer
 
 
 # =========================================================
-# NEXUS 1.1 | MARVEL INTELLIGENCE ENGINE
+# NEXUS | MARVEL INTELLIGENCE ENGINE
 # =========================================================
 
 st.set_page_config(
@@ -37,17 +35,9 @@ BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "nexus_data"
 ZIP_PATH = BASE_DIR / "NEXUS_COMPLETE.zip"
 
-REQUIRED_FILES = [
-    "knowledge_base.csv",
-    "character_intelligence.csv",
-    "timeline.csv",
-    "nexus_faiss.index",
-    "character_network.graphml"
-]
-
 
 # =========================================================
-# INTERFACE
+# MARVEL-INSPIRED INTERFACE
 # =========================================================
 
 st.markdown("""
@@ -71,8 +61,17 @@ h1, h2, h3 {
     letter-spacing: 1px;
 }
 
-h1 { color: #f12b36 !important; }
-h2, h3 { color: #eeeeee !important; }
+h1 {
+    color: #f12b36 !important;
+}
+
+h2, h3 {
+    color: #eeeeee !important;
+}
+
+p, label, span, div {
+    font-family: 'Roboto', sans-serif;
+}
 
 .stButton > button {
     background: linear-gradient(90deg, #9e101a, #e32636);
@@ -107,6 +106,10 @@ h2, h3 { color: #eeeeee !important; }
     border: 1px solid #8d2029;
 }
 
+hr {
+    border-color: #5b1b21;
+}
+
 .nexus-banner {
     background: linear-gradient(100deg, #27090d, #111111 75%);
     border: 1px solid #8d1d28;
@@ -136,14 +139,6 @@ h2, h3 { color: #eeeeee !important; }
     font-size: 14px;
 }
 
-.character-card {
-    background: linear-gradient(145deg, #211719, #100d0e);
-    border: 1px solid #692027;
-    border-radius: 12px;
-    padding: 12px;
-    margin-bottom: 12px;
-}
-
 .small-note {
     color: #a9a0a1;
     font-size: 12px;
@@ -153,57 +148,51 @@ h2, h3 { color: #eeeeee !important; }
 
 
 # =========================================================
-# DOWNLOAD AND EXTRACT
+# DOWNLOAD AND EXTRACT DATA
 # =========================================================
-
-def find_data_folder():
-
-    for file in DATA_DIR.rglob("knowledge_base.csv"):
-
-        folder = file.parent
-
-        if all((folder / name).is_file() for name in REQUIRED_FILES):
-            return folder
-
-    return None
-
 
 def download_and_extract():
 
     DATA_DIR.mkdir(parents=True, exist_ok=True)
 
-    existing_folder = find_data_folder()
+    required_files = [
+        "knowledge_base.csv",
+        "character_intelligence.csv",
+        "timeline.csv",
+        "nexus_faiss.index",
+        "character_network.graphml"
+    ]
 
-    if existing_folder is not None:
-        return existing_folder
+    existing = list(DATA_DIR.rglob("knowledge_base.csv"))
 
-    st.info("NEXUS archive not found locally. Downloading intelligence data...")
+    if existing:
+        folder = existing[0].parent
+
+        if all((folder / file).exists() for file in required_files):
+            return folder
+
+    st.info("Downloading NEXUS intelligence archive...")
 
     response = requests.get(
         GITHUB_ZIP_URL,
         stream=True,
         timeout=180
     )
-
     response.raise_for_status()
 
     with open(ZIP_PATH, "wb") as file:
-
-        for chunk in response.iter_content(
-            chunk_size=1024 * 1024
-        ):
-
+        for chunk in response.iter_content(chunk_size=1024 * 1024):
             if chunk:
                 file.write(chunk)
 
-    st.info("Extracting NEXUS intelligence archive...")
+    st.info("Extracting intelligence archive...")
 
     with zipfile.ZipFile(ZIP_PATH, "r") as archive:
 
+        # Prevent unsafe paths from escaping the data directory.
         root = DATA_DIR.resolve()
 
         for member in archive.infolist():
-
             target = (DATA_DIR / member.filename).resolve()
 
             if target != root and root not in target.parents:
@@ -211,15 +200,17 @@ def download_and_extract():
 
         archive.extractall(DATA_DIR)
 
-    folder = find_data_folder()
+    for knowledge_file in DATA_DIR.rglob("knowledge_base.csv"):
 
-    if folder is None:
+        folder = knowledge_file.parent
 
-        raise FileNotFoundError(
-            "NEXUS archive extracted, but required files are missing."
-        )
+        if all((folder / file).exists() for file in required_files):
+            return folder
 
-    return folder
+    raise FileNotFoundError(
+        "The ZIP was extracted, but one or more required NEXUS files "
+        "could not be found. Check the archive contents."
+    )
 
 
 # =========================================================
@@ -244,22 +235,6 @@ def load_nexus():
         folder / "character_network.graphml"
     )
 
-    characters["character"] = (
-        characters["character"].fillna("").astype(str)
-    )
-
-    knowledge["character"] = (
-        knowledge["character"].fillna("").astype(str)
-    )
-
-    knowledge["document_type"] = (
-        knowledge["document_type"].fillna("").astype(str)
-    )
-
-    knowledge["text"] = (
-        knowledge["text"].fillna("").astype(str)
-    )
-
     return knowledge, characters, timeline, index, graph
 
 
@@ -281,7 +256,7 @@ except Exception as error:
 
 
 # =========================================================
-# EMBEDDING MODEL
+# LOAD EMBEDDING MODEL
 # =========================================================
 
 @st.cache_resource(show_spinner="Initialising semantic search...")
@@ -292,16 +267,13 @@ def load_embedding_model():
 
 
 try:
-
     embedding_model = load_embedding_model()
 
-except Exception:
-
+except Exception as error:
     embedding_model = None
-
     st.warning(
         "Semantic search is unavailable. "
-        "Graph and character intelligence remain available."
+        "Character profiles and graph intelligence can still work."
     )
 
 
@@ -335,64 +307,35 @@ ALIASES = {
 }
 
 
-def normalise_name(value):
-
-    return re.sub(
-        r"\s+",
-        " ",
-        str(value).strip().lower()
-    )
-
-
 def resolve_character(query):
 
-    query = normalise_name(query)
+    query = str(query).strip().lower()
 
-    if not query:
-        return None
+    if query in ALIASES:
+        return ALIASES[query]
 
-    # First: exact dataset match
     exact = characters[
-        characters["character"].apply(normalise_name) == query
+        characters["character"].str.lower() == query
     ]
 
     if not exact.empty:
         return exact.iloc[0]["character"]
 
-    # Second: alias match, but verify it exists
-    canonical = ALIASES.get(query)
-
-    if canonical:
-
-        match = characters[
-            characters["character"].apply(normalise_name)
-            == normalise_name(canonical)
-        ]
-
-        if not match.empty:
-            return match.iloc[0]["character"]
-
-    # Third: partial matches
     matches = characters[
-        characters["character"].apply(
-            lambda name: query in normalise_name(name)
+        characters["character"].str.lower().str.contains(
+            query,
+            regex=False,
+            na=False
         )
-    ].copy()
+    ]
 
-    if matches.empty:
-        return None
+    if not matches.empty:
+        return matches.sort_values(
+            "connections",
+            ascending=False
+        ).iloc[0]["character"]
 
-    # Prefer the closest name, then network size
-    matches["_name_length"] = (
-        matches["character"].str.len()
-    )
-
-    matches = matches.sort_values(
-        ["_name_length", "connections"],
-        ascending=[True, False]
-    )
-
-    return matches.iloc[0]["character"]
+    return None
 
 
 # =========================================================
@@ -416,229 +359,8 @@ def get_profile(name):
     return result.iloc[0]
 
 
-
 # =========================================================
-# ONLINE CHARACTER IMAGES — NEXUS 1.2
-# Wikimedia Commons + Wikipedia fallback
-# No API keys required
-# =========================================================
-
-# =========================================================
-# NEXUS — OFFICIAL MARVEL CHARACTER IMAGES
-# No API key. No third-party image search.
-# =========================================================
-
-import re
-import requests
-import streamlit as st
-
-
-MARVEL_CHARACTER_SLUGS = {
-    "IRON MAN": "iron-man-tony-stark",
-    "SPIDER-MAN": "spider-man-peter-parker",
-    "CAPTAIN AMERICA": "captain-america-steve-rogers",
-    "THOR": "thor-thor-odinson",
-    "HULK": "hulk-bruce-banner",
-    "SCARLET WITCH": "scarlet-witch-wanda-maximoff",
-    "BLACK WIDOW": "black-widow-natasha-romanova",
-    "DOCTOR STRANGE": "doctor-strange-stephen-strange",
-    "BLACK PANTHER": "black-panther-t-challa",
-    "WOLVERINE": "wolverine-james-howlett",
-    "DEADPOOL": "deadpool-wade-wilson",
-    "LOKI": "loki-laufeyson",
-    "HAWKEYE": "hawkeye-clint-barton",
-    "ANT-MAN": "ant-man-scott-lang",
-    "VISION": "vision-vision",
-    "MR. FANTASTIC": "mister-fantastic-reed-richards",
-    "THING": "thing-ben-grimm",
-    "HUMAN TORCH": "human-torch-johnny-storm"
-}
-
-
-@st.cache_data(ttl=86400, show_spinner=False)
-def get_official_marvel_image(character):
-
-    character_name = str(character).split("/")[0].strip().upper()
-
-    slug = MARVEL_CHARACTER_SLUGS.get(character_name)
-
-    if not slug:
-        return None, None
-
-    page_url = f"https://www.marvel.com/characters/{slug}"
-
-    headers = {
-        "User-Agent": "Mozilla/5.0 (compatible; NEXUSCharacterGallery/1.0)"
-    }
-
-    try:
-        response = requests.get(
-            page_url,
-            headers=headers,
-            timeout=20
-        )
-
-        response.raise_for_status()
-
-        html = response.text
-
-        # Read only the official page's Open Graph image.
-        match = re.search(
-            r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\']([^"\']+)',
-            html,
-            re.IGNORECASE
-        )
-
-        if not match:
-            match = re.search(
-                r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+property=["\']og:image["\']',
-                html,
-                re.IGNORECASE
-            )
-
-        if not match:
-            return None, page_url
-
-        image_url = match.group(1).replace("&amp;", "&")
-
-        # Strictly allow Marvel-owned image URLs.
-        if not (
-            image_url.startswith("https://")
-            and "marvel.com" in image_url.lower()
-        ):
-            return None, page_url
-
-        return image_url, page_url
-
-    except requests.RequestException:
-        return None, page_url
-
-
-def display_character_image(character):
-
-    image_url, source_url = get_official_marvel_image(character)
-
-    if image_url:
-        st.image(
-            image_url,
-            use_container_width=True
-        )
-
-        st.caption("Official Marvel character artwork")
-        st.markdown(f"[View Marvel character profile]({source_url})")
-
-    else:
-        st.info(
-            "Official Marvel artwork is currently unavailable "
-            "for this character."
-        )
-
-# =========================================================
-# CHARACTER IMAGE DISPLAY
-# =========================================================
-
-def display_character_image(character, width=None):
-
-    image_url, source_url = get_character_image(character)
-
-    if image_url:
-
-        try:
-
-            st.image(
-                image_url,
-                use_container_width=True
-            )
-
-            if source_url:
-
-                st.markdown(
-                    f"[Image source]({source_url})"
-                )
-
-        except Exception:
-
-            st.warning("Character image could not be displayed.")
-
-    else:
-
-        st.markdown(
-            """
-            <div style="
-                background:linear-gradient(145deg,#251012,#100d0e);
-                border:1px solid #692027;
-                border-radius:10px;
-                padding:35px 10px;
-                text-align:center;
-                color:#ff4652;
-                font-size:30px;">
-                ✦
-                <div style="font-size:11px;color:#aaa;margin-top:8px;">
-                    IMAGE UNAVAILABLE
-                </div>
-            </div>
-            """,
-            unsafe_allow_html=True
-        )
-
-
-# =========================================================
-# CHARACTER GALLERY
-# =========================================================
-
-def character_gallery(data, limit=8):
-
-    if data.empty:
-        st.info("No character records available.")
-        return
-
-    gallery = data.head(limit)
-
-    cols = st.columns(4)
-
-    for i, (_, row) in enumerate(gallery.iterrows()):
-
-        character = row["character"]
-
-        with cols[i % 4]:
-
-            with st.container(border=True):
-
-                image_url, source_url = get_character_image(character)
-
-                if image_url:
-
-                    st.image(
-                        image_url,
-                        use_container_width=True
-                    )
-
-                else:
-
-                    st.markdown(
-                        "<div style='padding:45px;text-align:center;"
-                        "background:#211719;color:#ff4652;'>✦</div>",
-                        unsafe_allow_html=True
-                    )
-
-                st.markdown(f"**{character}**")
-
-                st.caption(
-                    f"{int(row['comic_appearances']):,} comic appearances"
-                )
-
-                st.caption(
-                    f"{int(row['connections']):,} network connections"
-                )
-
-                if source_url:
-                    st.markdown(
-                        f"[Image source]({source_url})"
-                    )
-
-
-# =========================================================
-# KNOWLEDGE SEARCH
+# SEMANTIC KNOWLEDGE SEARCH
 # =========================================================
 
 def knowledge_search(query, top_k=5):
@@ -646,43 +368,6 @@ def knowledge_search(query, top_k=5):
     if embedding_model is None:
         return pd.DataFrame()
 
-    query = str(query).strip()
-
-    if not query:
-        return pd.DataFrame()
-
-    # Character-only searches use exact character documents.
-    canonical = resolve_character(query)
-
-    if canonical:
-
-        exact_results = knowledge[
-            knowledge["character"] == canonical
-        ].copy()
-
-        if not exact_results.empty:
-
-            # Put character profiles ahead of co-appearance records
-            exact_results["_priority"] = (
-                exact_results["document_type"]
-                .str.lower()
-                .map({
-                    "character_profile": 0,
-                    "profile": 0,
-                    "co_appearance": 1
-                })
-                .fillna(2)
-            )
-
-            exact_results = exact_results.sort_values(
-                "_priority"
-            )
-
-            return exact_results.drop(
-                columns=["_priority"]
-            ).head(top_k)
-
-    # Otherwise use semantic retrieval
     vector = embedding_model.encode(
         [query],
         convert_to_numpy=True
@@ -696,20 +381,23 @@ def knowledge_search(query, top_k=5):
     )
 
     valid = [
-        (idx, float(score))
-        for idx, score in zip(indices[0], scores[0])
+        idx for idx in indices[0]
         if 0 <= idx < len(knowledge)
     ]
 
     if not valid:
         return pd.DataFrame()
 
-    results = knowledge.iloc[
-        [idx for idx, _ in valid]
-    ].copy()
+    results = knowledge.iloc[valid].copy()
+
+    score_map = {
+        idx: float(score)
+        for idx, score in zip(indices[0], scores[0])
+        if idx in valid
+    }
 
     results["similarity"] = [
-        score for _, score in valid
+        score_map[idx] for idx in valid
     ]
 
     return results.sort_values(
@@ -732,6 +420,7 @@ def get_relationships(character, top_k=10):
     if not results.empty:
         return results.head(top_k)
 
+    # Fallback: graph neighbours
     if character in character_graph:
 
         neighbours = list(
@@ -739,22 +428,13 @@ def get_relationships(character, top_k=10):
         )
 
         return pd.DataFrame({
-
             "character": [character] * min(top_k, len(neighbours)),
-
-            "document_type": [
-                "graph_connection"
-            ] * min(top_k, len(neighbours)),
-
+            "document_type": ["graph_connection"] * min(top_k, len(neighbours)),
             "text": [
                 f"{character} is connected to {name} in the character network."
                 for name in neighbours[:top_k]
             ],
-
-            "evidence": [
-                "Character network graph"
-            ] * min(top_k, len(neighbours))
-
+            "evidence": ["Character network graph"] * min(top_k, len(neighbours))
         })
 
     return pd.DataFrame()
@@ -770,10 +450,8 @@ def draw_character_network(character, limit=20):
         st.warning("Character not found in the network graph.")
         return
 
-    neighbours = sorted(
-        character_graph.neighbors(character),
-        key=lambda node: character_graph.degree(node),
-        reverse=True
+    neighbours = list(
+        character_graph.neighbors(character)
     )[:limit]
 
     selected = [character] + neighbours
@@ -790,7 +468,8 @@ def draw_character_network(character, limit=20):
         k=0.8
     )
 
-    edge_x, edge_y = [], []
+    edge_x = []
+    edge_y = []
 
     for source, target in subgraph.edges():
 
@@ -808,8 +487,11 @@ def draw_character_network(character, limit=20):
         hoverinfo="none"
     )
 
-    node_x, node_y = [], []
-    node_text, node_sizes, node_colors = [], [], []
+    node_x = []
+    node_y = []
+    node_text = []
+    node_sizes = []
+    node_colors = []
 
     for node in subgraph.nodes():
 
@@ -832,13 +514,19 @@ def draw_character_network(character, limit=20):
         mode="markers+text",
         text=node_text,
         textposition="bottom center",
-        textfont=dict(color="white", size=9),
+        textfont=dict(
+            color="white",
+            size=9
+        ),
         hovertext=node_text,
         hoverinfo="text",
         marker=dict(
             size=node_sizes,
             color=node_colors,
-            line=dict(width=1, color="#ffffff")
+            line=dict(
+                width=1,
+                color="#ffffff"
+            )
         )
     )
 
@@ -864,7 +552,7 @@ def draw_character_network(character, limit=20):
 
 
 # =========================================================
-# TIMELINE
+# TIMELINE DATA
 # =========================================================
 
 def parse_participants(value):
@@ -873,9 +561,7 @@ def parse_participants(value):
         return value
 
     try:
-
         parsed = ast.literal_eval(str(value))
-
         return parsed if isinstance(parsed, list) else []
 
     except Exception:
@@ -889,12 +575,12 @@ def parse_participants(value):
 with st.sidebar:
 
     st.markdown("""
-    <div style="text-align:center;padding:15px 0;">
-        <div style="font-family:Orbitron;color:#ed2939;
-                    font-size:30px;font-weight:800;">
+    <div style="text-align:center; padding:15px 0;">
+        <div style="font-family:Orbitron; color:#ed2939;
+                    font-size:30px; font-weight:800;">
             NEXUS
         </div>
-        <div style="color:#aaa;letter-spacing:3px;font-size:10px;">
+        <div style="color:#aaa; letter-spacing:3px; font-size:10px;">
             MARVEL INTELLIGENCE ENGINE
         </div>
     </div>
@@ -927,7 +613,7 @@ with st.sidebar:
     else:
         st.warning("Semantic engine offline")
 
-    st.caption("NEXUS VERSION 1.1")
+    st.caption("NEXUS VERSION 1.0")
 
 
 # =========================================================
@@ -936,9 +622,7 @@ with st.sidebar:
 
 st.markdown("""
 <div class="nexus-banner">
-    <div class="nexus-kicker">
-        MARVEL UNIVERSE // INTELLIGENCE DIVISION
-    </div>
+    <div class="nexus-kicker">MARVEL UNIVERSE // INTELLIGENCE DIVISION</div>
     <div class="nexus-title">NEXUS</div>
     <div class="nexus-subtitle">
         Neural Exploration of Character Networks, Relationships
@@ -963,10 +647,25 @@ if page == "Command Centre":
 
     col1, col2, col3, col4 = st.columns(4)
 
-    col1.metric("CHARACTERS", f"{len(characters):,}")
-    col2.metric("NETWORK NODES", f"{character_graph.number_of_nodes():,}")
-    col3.metric("NETWORK EDGES", f"{character_graph.number_of_edges():,}")
-    col4.metric("KNOWLEDGE DOCUMENTS", f"{len(knowledge):,}")
+    col1.metric(
+        "CHARACTERS",
+        f"{len(characters):,}"
+    )
+
+    col2.metric(
+        "NETWORK NODES",
+        f"{character_graph.number_of_nodes():,}"
+    )
+
+    col3.metric(
+        "NETWORK EDGES",
+        f"{character_graph.number_of_edges():,}"
+    )
+
+    col4.metric(
+        "KNOWLEDGE DOCUMENTS",
+        f"{len(knowledge):,}"
+    )
 
     st.divider()
 
@@ -1020,54 +719,9 @@ if page == "Command Centre":
             hide_index=True
         )
 
-    # NEW: VISUAL CHARACTER GALLERY
-
     st.divider()
 
-    st.subheader("MARVEL CHARACTER DATABASE")
-
-    st.caption(
-        "Explore character portraits alongside their network intelligence."
-    )
-
-    gallery_option = st.selectbox(
-        "Gallery ranking",
-        [
-            "Most Connected",
-            "Most Comic Appearances",
-            "Most Influential"
-        ]
-    )
-
-    if gallery_option == "Most Connected":
-
-        gallery_data = characters.sort_values(
-            "connections",
-            ascending=False
-        )
-
-    elif gallery_option == "Most Comic Appearances":
-
-        gallery_data = characters.sort_values(
-            "comic_appearances",
-            ascending=False
-        )
-
-    else:
-
-        gallery_data = characters.sort_values(
-            "pagerank",
-            ascending=False
-        )
-
-    character_gallery(
-        gallery_data,
-        limit=8
-    )
-
-    st.divider()
-
-    st.subheader("QUICK CHARACTER LOOKUP")
+    st.subheader("Quick Character Lookup")
 
     quick_name = st.text_input(
         "Search the Marvel character database",
@@ -1079,18 +733,11 @@ if page == "Command Centre":
         profile = get_profile(quick_name)
 
         if profile is None:
-
             st.error("Character not found.")
 
         else:
-
-            st.session_state["selected_character"] = (
-                profile["character"]
-            )
-
-            st.success(
-                f"Character identified: {profile['character']}"
-            )
+            st.session_state["selected_character"] = profile["character"]
+            st.success(f"Character identified: {profile['character']}")
 
 
 # =========================================================
@@ -1120,36 +767,27 @@ elif page == "Character Intelligence":
 
             st.markdown(f"### {character}")
 
-            image_col, data_col = st.columns([1, 2])
+            c1, c2, c3, c4 = st.columns(4)
 
-            with image_col:
-                display_character_image(character)
+            c1.metric(
+                "CONNECTIONS",
+                f"{int(profile['connections']):,}"
+            )
 
-            with data_col:
+            c2.metric(
+                "COMIC APPEARANCES",
+                f"{int(profile['comic_appearances']):,}"
+            )
 
-                c1, c2 = st.columns(2)
+            c3.metric(
+                "PAGERANK",
+                f"{profile['pagerank']:.6f}"
+            )
 
-                c1.metric(
-                    "CONNECTIONS",
-                    f"{int(profile['connections']):,}"
-                )
-
-                c2.metric(
-                    "COMIC APPEARANCES",
-                    f"{int(profile['comic_appearances']):,}"
-                )
-
-                c3, c4 = st.columns(2)
-
-                c3.metric(
-                    "PAGERANK",
-                    f"{profile['pagerank']:.6f}"
-                )
-
-                c4.metric(
-                    "COMMUNITY",
-                    str(profile["community"])
-                )
+            c4.metric(
+                "COMMUNITY",
+                str(profile["community"])
+            )
 
             st.divider()
 
@@ -1159,19 +797,15 @@ elif page == "Character Intelligence":
 
             if not relationships.empty:
 
-                columns_to_show = [
-                    col for col in ["text", "evidence"]
-                    if col in relationships.columns
-                ]
-
                 st.dataframe(
-                    relationships[columns_to_show],
+                    relationships[
+                        ["text", "evidence"]
+                    ],
                     use_container_width=True,
                     hide_index=True
                 )
 
             else:
-
                 st.info("No relationship evidence available.")
 
             st.caption(
@@ -1199,16 +833,13 @@ elif page == "Relationship Explorer":
         profile = get_profile(search_name)
 
         if profile is None:
-
             st.error("Character not found.")
 
         else:
 
             character = profile["character"]
 
-            st.markdown(
-                f"### CONNECTION ANALYSIS: {character}"
-            )
+            st.markdown(f"### CONNECTION ANALYSIS: {character}")
 
             relationships = get_relationships(
                 character,
@@ -1224,7 +855,6 @@ elif page == "Relationship Explorer":
                 )
 
             else:
-
                 st.info("No relationship evidence found.")
 
 
@@ -1343,7 +973,7 @@ elif page == "Knowledge Search":
     st.subheader("NEXUS KNOWLEDGE RETRIEVAL")
 
     st.write(
-        "Search indexed character profiles and relationship evidence."
+        "Search the indexed character profiles and relationship evidence."
     )
 
     query = st.text_input(
@@ -1363,6 +993,13 @@ elif page == "Knowledge Search":
         if not query.strip():
 
             st.warning("Enter a search query.")
+
+        elif embedding_model is None:
+
+            st.error(
+                "Semantic search is unavailable because the embedding "
+                "model could not be loaded."
+            )
 
         else:
 
@@ -1387,18 +1024,10 @@ elif page == "Knowledge Search":
                         f"**{row['character']}**"
                     )
 
-                    if "similarity" in row.index:
-
-                        st.caption(
-                            f"{row['document_type']} | "
-                            f"Similarity: {row['similarity']:.3f}"
-                        )
-
-                    else:
-
-                        st.caption(
-                            f"{row['document_type']} | Exact character match"
-                        )
+                    st.caption(
+                        f"{row['document_type']} | "
+                        f"Similarity: {row['similarity']:.3f}"
+                    )
 
                     st.write(row["text"])
 
@@ -1414,17 +1043,14 @@ elif page == "Knowledge Search":
 st.divider()
 
 st.markdown("""
-<div style="text-align:center;padding:15px;">
-    <div style="font-family:Orbitron;color:#e32636;
-                font-size:16px;letter-spacing:3px;">
+<div style="text-align:center; padding:15px;">
+    <div style="font-family:Orbitron; color:#e32636;
+                font-size:16px; letter-spacing:3px;">
         NEXUS INTELLIGENCE SYSTEM
     </div>
-    <div style="color:#777;font-size:11px;margin-top:8px;">
+    <div style="color:#777; font-size:11px; margin-top:8px;">
         MARVEL CHARACTER NETWORK ANALYSIS • KNOWLEDGE RETRIEVAL
         • GRAPH INTELLIGENCE
-    </div>
-    <div style="color:#777;font-size:10px;margin-top:5px;">
-        VERSION 1.1
     </div>
 </div>
 """, unsafe_allow_html=True)
