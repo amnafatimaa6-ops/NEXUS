@@ -2,8 +2,7 @@ streamlit
 pandas
 numpy
 networkx
-matplotlib
+plotly
+requests
 faiss-cpu
 sentence-transformers
-torch
-requests
