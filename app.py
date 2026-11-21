@@ -422,144 +422,117 @@ def get_profile(name):
 # Wikimedia Commons + Wikipedia fallback
 # No API keys required
 # =========================================================
+
 # =========================================================
-# ONLINE CHARACTER IMAGES — STRICT MARVEL IMAGE MATCHING
+# NEXUS — OFFICIAL MARVEL CHARACTER IMAGES
+# No API key. No third-party image search.
 # =========================================================
 
-IMAGE_SEARCH_NAMES = {
-    "IRON MAN": ["Iron Man Tony Stark Marvel"],
-    "SPIDER-MAN": ["Spider-Man Peter Parker Marvel"],
-    "CAPTAIN AMERICA": ["Captain America Steve Rogers Marvel"],
-    "THOR": ["Thor Marvel Comics character"],
-    "HULK": ["Hulk Bruce Banner Marvel Comics"],
-    "SCARLET WITCH": ["Scarlet Witch Wanda Maximoff Marvel"],
-    "WOLVERINE": ["Wolverine Logan Marvel Comics"],
-    "BLACK WIDOW": ["Black Widow Natasha Romanoff Marvel"],
-    "DOCTOR STRANGE": ["Doctor Strange Stephen Strange Marvel"],
-    "BLACK PANTHER": ["Black Panther T'Challa Marvel"],
-    "DEADPOOL": ["Deadpool Wade Wilson Marvel"],
-    "LOKI": ["Loki Marvel Comics character"],
-    "HAWKEYE": ["Hawkeye Clint Barton Marvel"],
-    "ANT-MAN": ["Ant-Man Scott Lang Marvel"],
-    "VISION": ["Vision Marvel Comics character"],
-    "MR. FANTASTIC": ["Mister Fantastic Reed Richards Marvel"],
-    "THING": ["The Thing Ben Grimm Marvel"],
-    "HUMAN TORCH": ["Human Torch Johnny Storm Marvel"]
+import re
+import requests
+import streamlit as st
+
+
+MARVEL_CHARACTER_SLUGS = {
+    "IRON MAN": "iron-man-tony-stark",
+    "SPIDER-MAN": "spider-man-peter-parker",
+    "CAPTAIN AMERICA": "captain-america-steve-rogers",
+    "THOR": "thor-thor-odinson",
+    "HULK": "hulk-bruce-banner",
+    "SCARLET WITCH": "scarlet-witch-wanda-maximoff",
+    "BLACK WIDOW": "black-widow-natasha-romanova",
+    "DOCTOR STRANGE": "doctor-strange-stephen-strange",
+    "BLACK PANTHER": "black-panther-t-challa",
+    "WOLVERINE": "wolverine-james-howlett",
+    "DEADPOOL": "deadpool-wade-wilson",
+    "LOKI": "loki-laufeyson",
+    "HAWKEYE": "hawkeye-clint-barton",
+    "ANT-MAN": "ant-man-scott-lang",
+    "VISION": "vision-vision",
+    "MR. FANTASTIC": "mister-fantastic-reed-richards",
+    "THING": "thing-ben-grimm",
+    "HUMAN TORCH": "human-torch-johnny-storm"
 }
 
 
 @st.cache_data(ttl=86400, show_spinner=False)
-def get_character_image(character):
+def get_official_marvel_image(character):
 
-    raw_name = str(character).split("/")[0].strip()
-    normalized_name = raw_name.upper()
+    character_name = str(character).split("/")[0].strip().upper()
 
-    search_queries = IMAGE_SEARCH_NAMES.get(
-        normalized_name,
-        [f"{raw_name} Marvel Comics character"]
-    )
+    slug = MARVEL_CHARACTER_SLUGS.get(character_name)
+
+    if not slug:
+        return None, None
+
+    page_url = f"https://www.marvel.com/characters/{slug}"
 
     headers = {
-        "User-Agent": "NEXUSMarvelIntelligence/1.2 (character image lookup)"
+        "User-Agent": "Mozilla/5.0 (compatible; NEXUSCharacterGallery/1.0)"
     }
 
-    session = requests.Session()
-    session.headers.update(headers)
+    try:
+        response = requests.get(
+            page_url,
+            headers=headers,
+            timeout=20
+        )
 
-    for search_query in search_queries:
+        response.raise_for_status()
 
-        try:
-            response = session.get(
-                "https://commons.wikimedia.org/w/api.php",
-                params={
-                    "action": "query",
-                    "generator": "search",
-                    "gsrsearch": search_query,
-                    "gsrnamespace": 6,
-                    "gsrlimit": 30,
-                    "prop": "imageinfo",
-                    "iiprop": "url|extmetadata",
-                    "iiurlwidth": 800,
-                    "format": "json"
-                },
-                timeout=15
+        html = response.text
+
+        # Read only the official page's Open Graph image.
+        match = re.search(
+            r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\']([^"\']+)',
+            html,
+            re.IGNORECASE
+        )
+
+        if not match:
+            match = re.search(
+                r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+property=["\']og:image["\']',
+                html,
+                re.IGNORECASE
             )
 
-            response.raise_for_status()
+        if not match:
+            return None, page_url
 
-            pages = response.json().get(
-                "query", {}
-            ).get("pages", {})
+        image_url = match.group(1).replace("&amp;", "&")
 
-            for page in pages.values():
+        # Strictly allow Marvel-owned image URLs.
+        if not (
+            image_url.startswith("https://")
+            and "marvel.com" in image_url.lower()
+        ):
+            return None, page_url
 
-                title = page.get("title", "").lower()
+        return image_url, page_url
 
-                image_info = page.get("imageinfo", [])
-
-                if not image_info:
-                    continue
-
-                info = image_info[0]
-
-                image_url = info.get("thumburl") or info.get("url")
-                source_url = info.get("descriptionurl")
-
-                if not image_url:
-                    continue
-
-                # Reject obvious non-image and unrelated results.
-                if not title.startswith("file:"):
-                    continue
-
-                unwanted_terms = [
-                    "logo", "icon", "flag", "map",
-                    "poster", "cover", "font",
-                    "screenshot", "diagram"
-                ]
-
-                if any(term in title for term in unwanted_terms):
-                    continue
-
-                # Require the character name in the filename.
-                name_parts = [
-                    part.lower()
-                    for part in raw_name.replace("-", " ").split()
-                    if len(part) > 2
-                ]
-
-                if not any(part in title for part in name_parts):
-                    continue
-
-                return image_url, source_url
-
-        except Exception:
-            continue
-
-    return None, None
+    except requests.RequestException:
+        return None, page_url
 
 
 def display_character_image(character):
 
-    image_url, source_url = get_character_image(character)
+    image_url, source_url = get_official_marvel_image(character)
 
     if image_url:
-
         st.image(
             image_url,
             use_container_width=True
         )
 
-        if source_url:
-            st.caption("Image source: Wikimedia Commons")
-            st.markdown(f"[View original image]({source_url})")
+        st.caption("Official Marvel character artwork")
+        st.markdown(f"[View Marvel character profile]({source_url})")
 
     else:
-
-        st.warning(
-            f"No verified image found for {character}. "
-            "Try another character or check the connection."
+        st.info(
+            "Official Marvel artwork is currently unavailable "
+            "for this character."
         )
+
 # =========================================================
 # CHARACTER IMAGE DISPLAY
 # =========================================================
